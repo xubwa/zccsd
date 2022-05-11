@@ -76,7 +76,7 @@ def update_amps(cc, t1, t2, eris):
 class ZCCSD(gccsd.GCCSD):
 
     def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
-        assert(isinstance(mf, x2c.RHF))
+        assert(isinstance(mf, x2c.UHF))
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
 
     update_amps = update_amps
@@ -186,10 +186,13 @@ if __name__ == '__main__':
     mol.basis = 'cc-pvdz'
     mol.spin = 0
     mol.build()
-    mf = x2c.RHF(mol).run()
+    mf = x2c.UHF(mol).run()
     mycc = ZCCSD(mf)
     ecc, t1, t2 = mycc.kernel()
     print(ecc)
+    print(t1.shape, t1.dtype)
+    print(t2.shape, t2.dtype)
+    exit()
     e,v = mycc.ipccsd(nroots=8)
     print(e)
 
