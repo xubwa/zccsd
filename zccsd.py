@@ -76,7 +76,7 @@ def update_amps(cc, t1, t2, eris):
 class ZCCSD(gccsd.GCCSD):
 
     def __init__(self, mf, frozen=0, mo_coeff=None, mo_occ=None):
-        assert(isinstance(mf, x2c.UHF))
+        #assert(isinstance(mf, x2c.RHF))
         ccsd.CCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
 
     update_amps = update_amps
@@ -87,7 +87,7 @@ class ZCCSD(gccsd.GCCSD):
             mo_coeff=self.mo_coeff
         return _make_eris_outcore(self, mo_coeff)
 
-class _PhysicistsERIs:
+class _PhysicistsERIs(gccsd._PhysicistsERIs):
     '''<pq||rs> = <pq|rs> - <pq|sr>'''
     def __init__(self, mol=None):
         self.mol = mol
@@ -109,6 +109,8 @@ class _PhysicistsERIs:
         if mo_coeff is None:
             mo_coeff = mycc.mo_coeff
         mo_idx = ccsd.get_frozen_mask(mycc)
+        mo_coeff = mo_coeff[:,mo_idx]
+        print(mo_coeff.shape)
         self.mo_coeff = mo_coeff
 
         dm = mycc._scf.make_rdm1(mycc.mo_coeff, mycc.mo_occ)
@@ -125,14 +127,17 @@ class _PhysicistsERIs:
         return self 
 
 def _make_eris_outcore(mycc, mo_coeff=None):
-    cput0 = (time.clock(), time.time())
+    cput0 = (logger.process_clock(), logger.perf_counter())
     log = logger.Logger(mycc.stdout, mycc.verbose)
     eris = _PhysicistsERIs()
     eris._common_init_(mycc, mo_coeff)
+    print(mo_coeff.shape)
     nocc = eris.nocc
     nao, nmo = eris.mo_coeff.shape
     nvir = nmo - nocc
-    assert(eris.mo_coeff.dtype == np.complex)
+    assert(eris.mo_coeff.dtype == complex)
+    print(nao, nmo)
+    print(nocc, nvir)
 
     feri = eris.feris = lib.H5TmpFile()
     dtype = np.result_type(eris.mo_coeff).char
@@ -147,15 +152,21 @@ def _make_eris_outcore(mycc, mo_coeff=None):
     blksize = min(nocc, max(2, int(max_memory*1e6/16/(nmo**3*2))))
     max_memory = max(MEMORYMIN, max_memory)
 
-    mo = mo_coeff
+    mo = eris.mo_coeff
     orbo = mo[:,:nocc]
     orbv = mo[:,nocc:]
+    print(mo.shape)
+    print(orbo.shape, orbv.shape)
 
     fswap = lib.H5TmpFile()
-    r_outcore.general(mycc.mol, (orbo, mo, mo, mo), fswap, 'eri', max_memory=max_memory, verbose=log)
-
+    from pyscf import ao2mo
+    eri = ao2mo.general(mycc.mol, (orbo, mo, mo, mo), fswap, 'eri', intor='int2e_spinor',max_memory=max_memory, verbose=log)
+    #eri = ao2mo.general(mycc.mol, (orbo, orbv, orbv, orbv), intor='int2e_spinor',max_memory=max_memory, verbose=log)
+    print(np.asarray(fswap['eri']).shape)
     for p0, p1 in lib.prange(0, nocc, blksize):
-        tmp = np.asarray(fswap['eri'][p0*nmo:p1*nmo]).reshape(p1-p0, nmo, nmo, nmo)
+        tmp = np.asarray(fswap['eri'][p0*nmo:p1*nmo])
+        print(p0, nmo, p1, nmo)
+        tmp = tmp.reshape(p1-p0, nmo, nmo, nmo)
         eris.oooo[p0:p1] = (tmp[:,:nocc,:nocc,:nocc].transpose(0,2,1,3) - tmp[:,:nocc,:nocc,:nocc].transpose(0,2,3,1))
         eris.ooov[p0:p1] = (tmp[:,:nocc,:nocc,nocc:].transpose(0,2,1,3) - tmp[:,nocc:,:nocc,:nocc].transpose(0,2,3,1))
         eris.ovvv[p0:p1] = (tmp[:,nocc:,nocc:,nocc:].transpose(0,2,1,3) - tmp[:,nocc:,nocc:,nocc:].transpose(0,2,3,1))
@@ -185,22 +196,20 @@ if __name__ == '__main__':
         [1 , (0. , 0.757  , 0.587)]]
     mol.basis = 'cc-pvdz'
     mol.spin = 0
+    mol.verbose = 4 
     mol.build()
-    mf = x2c.UHF(mol).run()
-    mycc = ZCCSD(mf)
+    import x2camf_hf
+    mf = x2camf_hf.RHF(mol).run()
+    mycc = ZCCSD(mf, frozen=2)
     ecc, t1, t2 = mycc.kernel()
-    print(ecc)
-    print(t1.shape, t1.dtype)
-    print(t2.shape, t2.dtype)
+    e_corr = mycc.ccsd_t()
+    print(e_corr, e_corr + ecc)
     exit()
     e,v = mycc.ipccsd(nroots=8)
-    print(e)
 
     e,v = mycc.eaccsd(nroots=8)
-    print(e)
 
     e,v = mycc.eeccsd(nroots=4)
-    print(e)
     
     mf = scf.UHF(mol).run()
     mf = scf.addons.convert_to_ghf(mf)
@@ -223,5 +232,6 @@ if __name__ == '__main__':
     print(e[1] - 0.2757159395886167)
     print(e[2] - 0.2757159395886167)
     print(e[3] - 0.3005716731825082)
-
+    
+    mycc.ccsd_t()
         
